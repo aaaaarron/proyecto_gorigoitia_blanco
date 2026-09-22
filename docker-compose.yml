@@ -1,0 +1,112 @@
+services:
+
+  productos-db:
+    image: postgres:16-alpine
+    container_name: productos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: productos_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - productos_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - pedidos360-net
+
+  pedidos-db:
+    image: postgres:16-alpine
+    container_name: pedidos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pedidos_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - pedidos_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - pedidos360-net
+
+  productos-service:
+    build:
+      context: ./backend/productos-service
+    container_name: productos-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: productos-db
+      DB_PORT: 5432
+      DB_NAME: productos_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      COGNITO_ISSUER_URI: ${COGNITO_ISSUER_URI}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      productos-db:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    networks:
+      - pedidos360-net
+
+  pedidos-service:
+    build:
+      context: ./backend/pedidos-service
+    container_name: pedidos-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: pedidos-db
+      DB_PORT: 5432
+      DB_NAME: pedidos_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      COGNITO_ISSUER_URI: ${COGNITO_ISSUER_URI}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      PRODUCTOS_SERVICE_URL: http://productos-service:8081
+    depends_on:
+      pedidos-db:
+        condition: service_healthy
+      productos-service:
+        condition: service_started
+    ports:
+      - "8082:8082"
+    networks:
+      - pedidos360-net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COGNITO_REGION: ${VITE_COGNITO_REGION}
+        VITE_COGNITO_USER_POOL_ID: ${VITE_COGNITO_USER_POOL_ID}
+        VITE_COGNITO_USER_POOL_CLIENT_ID: ${VITE_COGNITO_USER_POOL_CLIENT_ID}
+    container_name: frontend
+    restart: unless-stopped
+    depends_on:
+      - productos-service
+      - pedidos-service
+    ports:
+      - "3000:80"
+    networks:
+      - pedidos360-net
+
+networks:
+  pedidos360-net:
+    driver: bridge
+
+volumes:
+  productos_db_data:
+  pedidos_db_data:

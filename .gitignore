@@ -1,0 +1,23 @@
+# Java / Maven
+backend/**/target/
+*.class
+*.jar
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*.local
+
+# Entornos y secretos
+.env
+*.pem
+*.key
+aws-credentials
+*.tokens
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
