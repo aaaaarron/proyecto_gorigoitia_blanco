@@ -128,9 +128,9 @@ export default function Streaming() {
 
     <section className="orders-section"><div className="section-heading"><div><span className="eyebrow">ANALÍTICA EN LÍNEA</span><h2>pedidos360-analitica-app</h2></div></div>
       <div className="stream-stats">
-        <div className="dashboard-card"><span className="eyebrow">PEDIDOS</span><p className="summary-number">{metrica("PEDIDOS_CREADOS")?.cantidad ?? 0}</p></div>
-        <div className="dashboard-card"><span className="eyebrow">VENTAS</span><p className="summary-number">{dinero(metrica("VENTAS_TOTALES")?.valor)}</p></div>
-        <div className="dashboard-card"><span className="eyebrow">ENVÍO / RETIRO</span><p className="summary-number">{metrica("ENTREGA:ENVIO")?.cantidad ?? 0} / {metrica("ENTREGA:RETIRO")?.cantidad ?? 0}</p></div>
+        <div className="dashboard-card"><span className="eyebrow">PEDIDOS</span><p className="stream-number">{metrica("PEDIDOS_CREADOS")?.cantidad ?? 0}</p></div>
+        <div className="dashboard-card"><span className="eyebrow">VENTAS</span><p className="stream-number">{dinero(metrica("VENTAS_TOTALES")?.valor)}</p></div>
+        <div className="dashboard-card"><span className="eyebrow">ENVÍO / RETIRO</span><p className="stream-number">{metrica("ENTREGA:ENVIO")?.cantidad ?? 0} / {metrica("ENTREGA:RETIRO")?.cantidad ?? 0}</p></div>
         <div className="dashboard-card"><span className="eyebrow">CAMBIOS DE ESTADO</span><p>{porEstado.map((x) => `${x.clave.replace("ESTADO:", "")}: ${x.cantidad}`).join(" · ") || "—"}</p></div>
         <div className="dashboard-card"><span className="eyebrow">ÚLTIMOS MINUTOS (UTC)</span><p>{porMinuto.map((x) => `${x.clave.slice(-5)} → ${x.cantidad}`).join(" · ") || "—"}</p></div>
       </div>

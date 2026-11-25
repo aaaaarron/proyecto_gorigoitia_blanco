@@ -4,3 +4,4 @@
 
 /* Parcial 3: panel de streaming */
 .stream-input{width:74px;min-height:36px;padding:0 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel-soft);color:var(--text)}.stream-app{margin-bottom:18px;padding:14px}.stream-app p{margin:0 0 10px;color:var(--muted);font-size:13px}.stream-app strong{color:var(--text)}.stream-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}.stream-stats .dashboard-card{margin:0}
+.stream-stats .dashboard-card p{border-bottom:0;margin:10px 0 0;padding:0;color:#d8d6ce;font-size:14px;line-height:1.5}.stream-stats .dashboard-card p.stream-number{font:700 34px/1.1 Manrope,sans-serif;letter-spacing:-.5px;color:var(--amber);text-shadow:0 0 22px #edb54c30;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
