@@ -1,8 +1,10 @@
 # Pedidos360
 
-Sistema de gestión de pedidos desarrollado para las **Evaluaciones Parciales N°1 y N°2 — DSY1107 (Desarrollo Cloud Native I, DuocUC)**.
+Sistema de gestión de pedidos desarrollado para las **Evaluaciones Parciales N°1, N°2 y N°3 — DSY1107 (Desarrollo Cloud Native I, DuocUC)**.
 
 > **Parcial 2:** se agregó mensajería asíncrona con **Amazon SNS + SQS** (1 tópico, 3 colas con DLQ, fanout + filtro de suscripción), dos microservicios nuevos (`eventos-service` y `mensajeria-admin`), monitoreo con **CloudWatch** y un panel de administración en el frontend. Todo está en la [sección 14](#14-mensajería-asíncrona-con-sns-y-sqs-parcial-2).
+
+> **Parcial 3:** se agregó **streaming de eventos con Amazon Kinesis Data Streams**: 2 streams de negocio de 3 shards + 1 stream de mensajes fallidos, productores en `pedidos-service` y `productos-service`, un microservicio nuevo `streaming-service` con 4 aplicaciones consumidoras (KCL) organizadas por dominio, administración de streams en `mensajeria-admin` (`StreamAdminService`), alarma de CloudWatch y el panel **Streaming** del frontend. La mensajería SNS/SQS del Parcial 2 sigue igual. Todo está en la [sección 15](#15-streaming-de-eventos-con-amazon-kinesis-parcial-3).
 
 Pedidos360 demuestra, de punta a punta, un flujo de autenticación y autorización real con **Amazon Cognito**, comunicación segura entre **microservicios Spring Boot**, y un **frontend React con AWS Amplify**, todo ejecutable localmente con Docker y listo para desplegar en AWS sin reescribir código.
 
@@ -104,7 +106,9 @@ pedidos360/
 │   ├── productos-service/     # Spring Boot — microservicio de productos
 │   ├── pedidos-service/       # Spring Boot — pedidos (publica eventos en SNS)
 │   ├── eventos-service/       # Parcial 2 — consumidores SQS por dominio + monitor de DLQ
-│   └── mensajeria-admin/      # Parcial 2 — topología SNS/SQS + API REST de administración
+│   ├── mensajeria-admin/      # Parcial 2 — topología SNS/SQS + API REST de administración
+│   │                          # Parcial 3 — StreamAdminService: administración de streams Kinesis
+│   └── streaming-service/     # Parcial 3 — aplicaciones consumidoras Kinesis (KCL) por dominio
 ├── infra/                     # Parcial 2 — scripts PowerShell (CloudWatch, demo, limpieza)
 ├── .github/workflows/         # CI: compila y prueba todos los componentes
 ├── docker-compose.yml
@@ -134,6 +138,8 @@ Servicios expuestos:
 | eventos-service (Parcial 2) | http://localhost:8083 (Swagger: `/swagger-ui.html`) |
 | mensajeria-admin (Parcial 2) | http://localhost:8090 (Swagger: `/swagger-ui.html`) |
 | eventos-db (Parcial 2) | localhost:5435 |
+| streaming-service (Parcial 3) | http://localhost:8085 (Swagger: `/swagger-ui.html`) |
+| streaming-db (Parcial 3) | localhost:5436 |
 
 Para el Parcial 2, `.env` también debe tener las credenciales del Learner Lab (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`). Ver sección 14.
 
@@ -237,10 +243,11 @@ La autorización se aplica en `SecurityConfig` de cada microservicio usando `has
 cd backend/productos-service && mvn test
 cd backend/pedidos-service && mvn test
 cd backend/eventos-service && mvn test     # Parcial 2: ACK manual, idempotencia y DLQ (Mockito, sin AWS)
-cd backend/mensajeria-admin && mvn test    # Parcial 2: validación de la topología declarada
+cd backend/mensajeria-admin && mvn test    # Parcial 2: validación de la topología declarada · Parcial 3: declaración de streams
+cd backend/streaming-service && mvn test   # Parcial 3: validación, reintentos, duplicados y stream de fallidos (sin AWS)
 ```
 
-Además, GitHub Actions (`.github/workflows/build.yml`) compila y prueba los 4 microservicios y el frontend en cada push.
+Además, GitHub Actions (`.github/workflows/build.yml`) compila y prueba los 5 microservicios y el frontend en cada push.
 
 Cubren: creación/consulta de productos, error 404 al pedir un producto inexistente, error de stock insuficiente, creación de pedidos con `ProductosClient` simulado (Mockito), cambio de estado de un pedido.
 
@@ -386,6 +393,8 @@ Usar **Amazon RDS para PostgreSQL** (una instancia `db.t3.micro` es suficiente),
 | `COGNITO_ISSUER_URI` | Igual en ambos entornos (mismo User Pool) | Igual |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` | Credenciales del Learner Lab en `.env` | No se usan: la EC2 toma el rol **LabRole** (Instance profile) |
 | `EVENTOS_SERVICE_URLS` (admin) | `http://eventos-service:8083` | `http://<IP-privada-EC2-eventos>:8083` (separadas por coma si hay varias instancias) |
+| `STREAMING_SERVICE_URLS` (admin, Parcial 3) | `http://streaming-service:8085,http://streaming-service-2:8085` | `http://<IP-privada-EC2-streaming-1>:8085,http://<IP-privada-EC2-streaming-2>:8085` |
+| `INSTANCIA_ID` (streaming-service, Parcial 3) | `streaming-1` / `streaming-2` | Un nombre distinto por EC2 (`streaming-ec2-1`, `streaming-ec2-2`) |
 
 La lógica de negocio y de seguridad (Java, React) **no cambia**: solo configuración.
 
@@ -517,3 +526,250 @@ Segunda instancia de consumidores (demo de escalamiento): `infra/4-segunda-insta
 - `DlqMonitor` lee las DLQ con `VisibilityTimeout = 0` para no ocultar mensajes. Cada lectura incrementa su `ApproximateReceiveCount` en la DLQ, por eso el "intento" se toma del atributo `intento` que agrega el consumidor (o de `maxReceiveCount` si el mensaje lo movió la Redrive Policy).
 - Pausar un consumidor afecta a las instancias listadas en `EVENTOS_SERVICE_URLS` (en Docker Compose: `eventos-service` y `eventos-service-2`). Si una no está corriendo, el panel la muestra como "Instancia no disponible".
 - Suscribir una cola desde el admin reemplaza la *policy* de esa cola por una que autoriza solo a ese tópico.
+
+---
+
+## 15. Streaming de eventos con Amazon Kinesis (Parcial 3)
+
+Kinesis **complementa** la mensajería del Parcial 2, no la reemplaza. Cuando se crea un pedido o cambia su estado, `pedidos-service` publica el evento en **SNS** (notificar, despachar, auditar: tareas que se hacen una vez y se borran) **y** en **Kinesis** (analítica y seguimiento en tiempo real: lecturas que varias aplicaciones hacen sobre el mismo flujo, cada una a su ritmo, con posibilidad de releer). `productos-service` publica cada movimiento de stock en un segundo stream.
+
+### 15.1 Arquitectura
+
+```mermaid
+flowchart LR
+  FE[React + Amplify] -->|login| COG[Cognito]
+  FE -->|JWT| APIGW[API Gateway]
+  APIGW --> PED[pedidos-service]
+  APIGW --> PRO[productos-service]
+  APIGW --> ADM[mensajeria-admin<br/>StreamAdminService]
+  PED -->|Parcial 2| SNS[SNS pedidos360-eventos] --> SQS[3 colas SQS + DLQ] --> EVT[eventos-service]
+  PED -->|PutRecords clave=pedidoId| KP[(pedidos360-pedidos-stream<br/>3 shards · 48 h)]
+  PRO -->|PutRecords clave=productoId| KI[(pedidos360-inventario-stream<br/>3 shards · 24 h)]
+  subgraph STR[streaming-service · N instancias]
+    A1[pedidos360-analitica-app]
+    A2[pedidos360-seguimiento-app]
+    A3[pedidos360-inventario-app]
+    A4[pedidos360-fallidos-app]
+  end
+  KP --> A1 & A2
+  KI --> A3
+  A1 & A2 & A3 -->|irrecuperables| KF[(pedidos360-fallidos-stream<br/>1 shard · 168 h)] --> A4
+  STR <-->|leases y checkpoints| DDB[(DynamoDB<br/>1 tabla por aplicación)]
+  STR --> SDB[(streaming_db)]
+  KP -.->|IteratorAge| CW[CloudWatch + alarma]
+  ADM -->|SDK| KP & KI & KF & DDB & CW
+  ADM -->|HTTP interno| STR
+```
+
+**Qué administra AWS y qué administra el equipo**
+
+| AWS (servicio gestionado) | Equipo |
+| --- | --- |
+| Servidores, almacenamiento y red del stream | Cantidad de shards y modo de capacidad de cada stream |
+| Replicación síncrona de cada registro en **3 zonas de disponibilidad** antes de confirmar el `PutRecord` | Retención de cada stream |
+| Retención y orden de los registros dentro de cada shard | Clave de partición (qué orden se garantiza) |
+| Métricas del stream en CloudWatch | Aplicaciones consumidoras (nombre, cuántas instancias) y su **tabla de coordinación** en DynamoDB |
+| Escalado del almacenamiento de DynamoDB (on demand) | Checkpoints, manejo de errores, alarma |
+
+No se levantan brokers, nodos de coordinación ni docker-compose para Kinesis: el `docker-compose.yml` solo ejecuta los microservicios.
+
+**Disponibilidad y tolerancia a fallos:** si cae una zona, el stream sigue disponible (réplicas en las otras dos). Si cae una instancia de `streaming-service`, sus *leases* en DynamoDB dejan de renovarse y en ~10 s otra instancia de la misma aplicación los toma y continúa **desde el último checkpoint**. Lo que la instancia caída alcanzó a procesar sin checkpoint se vuelve a leer, y el control de duplicados por `eventId` evita procesarlo dos veces.
+
+### 15.2 Streams y justificación de parámetros
+
+Declarados en `backend/mensajeria-admin/src/main/resources/application.yml` (`streaming.streams`), aplicados por `StreamAdminService` (al iniciar o con `POST /api/admin/streams/aplicar`). Plan B equivalente por CLI: `infra/6-kinesis-streams.ps1`.
+
+| Stream | Modo | Shards | Retención | Clave de partición | Por qué |
+| --- | --- | --- | --- | --- | --- |
+| `pedidos360-pedidos-stream` | PROVISIONED | 3 | 48 h | `pedidoId` | Lo leen 2 aplicaciones. 3 shards dan hasta 3.000 registros/s (3 MB/s) de escritura y permiten repartir la lectura entre hasta 3 instancias por aplicación. 48 h para reprocesar si una aplicación estuvo caída o hay que recalcular la analítica. |
+| `pedidos360-inventario-stream` | PROVISIONED | 3 | 24 h | `productoId` | Un evento por producto de cada pedido (más volumen que pedidos). La alerta de stock bajo pierde valor rápido: basta la retención mínima, que es la más barata. |
+| `pedidos360-fallidos-stream` | PROVISIONED | 1 | 168 h | aplicación que falló | Bajo volumen: 1 shard sobra. 7 días para diagnosticar y reprocesar; siempre retiene más que los de negocio (lo valida `DeclaracionStreams`). |
+
+- **PROVISIONED y no ON_DEMAND:** la cantidad de shards es fija y conocida (3), el costo es predecible y se puede demostrar el reparto de shards entre instancias. ON_DEMAND conviene cuando el tráfico es impredecible.
+- **Capacidad de un shard:** escritura 1 MB/s o 1.000 registros/s; lectura 2 MB/s y 5 `GetRecords`/s, compartidos por todas las aplicaciones que leen el stream. Por eso cada aplicación lee cada 1 s (`kinesis.lectura.intervalo-ms`).
+- **Clave de partición y orden:** Kinesis aplica MD5 a la clave y la ubica en el rango de hash de un shard. Todos los eventos de un mismo pedido caen en el mismo shard y se leen en orden (creado → confirmado → listo). Pedidos distintos se reparten entre los 3 shards. El orden **entre** pedidos distintos no se garantiza, y no hace falta.
+- **Métricas por shard:** `StreamAdminService` habilita `IncomingRecords`, `OutgoingRecords` e `IteratorAgeMilliseconds` por shard (monitoreo mejorado) para ver la distribución del consumo.
+
+### 15.3 Diseño de los eventos (DTO + JSON)
+
+```jsonc
+{
+  "eventId": "6f1c…",                  // único: control de duplicados (Kinesis entrega "al menos una vez")
+  "tipoEvento": "PEDIDO_CREADO",       // PEDIDO_CREADO | PEDIDO_ESTADO_ACTUALIZADO
+  "version": 1,                        // versión del contrato: permite evolucionarlo sin romper consumidores
+  "ocurridoEn": "2026-11-24T21:00:00Z",// instante del hecho: el consumidor calcula la latencia del streaming
+  "origen": "pedidos-service",         // trazabilidad
+  "pedidoId": 42,                      // CLAVE DE PARTICIÓN
+  "usuarioEmail": "cliente@pedidos360.cl",
+  "estado": "PENDIENTE",
+  "tipoEntrega": "ENVIO",
+  "total": 19980.0,
+  "cantidadItems": 2
+}
+```
+
+`EventoInventario` (stream de inventario): `eventId`, `tipoEvento` (STOCK_RESERVADO, STOCK_BAJO, STOCK_AJUSTADO), `version`, `ocurridoEn`, `origen`, `productoId` (**clave**), `nombre`, `cantidad`, `stockRestante`. Con estos campos los consumidores no necesitan consultar otra API.
+
+`EventoFallido` (stream de fallidos): conserva el `payloadOriginal` y todo el contexto para diagnosticar y reprocesar (`aplicacion`, `streamOrigen`, `shardId`, `sequenceNumber`, `eventIdOriginal`, `intentos`, `tipoError`, `causa`).
+
+### 15.4 Productores
+
+| Servicio | Clase | Stream |
+| --- | --- | --- |
+| `pedidos-service` | `streaming/KinesisStreamPublisher` (puerto `StreamPublisher`) | pedidos |
+| `productos-service` | `streaming/KinesisInventarioPublisher` (puerto `InventarioPublisher`) | inventario |
+
+Ambos usan `ProductorKinesis`: envía con **PutRecords** y **revisa cada entrada de la respuesta**. PutRecords puede responder 200 con parte de los registros rechazados (`FailedRecordCount > 0`, típicamente `ProvisionedThroughputExceededException`). Solo los rechazados se reenvían, con espera creciente (100 ms → 200 ms). Si se agotan los intentos, quedan en el log con `eventId` y causa. Una reserva de stock que deja el producto bajo el umbral envía `STOCK_RESERVADO` + `STOCK_BAJO` en **un solo lote**. La lógica de negocio (`PedidoService`, `ProductoService`) solo conoce la interfaz.
+
+### 15.5 Aplicaciones consumidoras (consumer groups)
+
+`streaming-service` ejecuta 4 aplicaciones KCL. Cada una tiene **nombre propio**, que es también el de su **tabla de coordinación en DynamoDB** (la crea la KCL), y lleva su propio checkpoint por shard.
+
+| Aplicación | Stream | Dominio (paquete) | Qué hace |
+| --- | --- | --- | --- |
+| `pedidos360-analitica-app` | pedidos | `analitica/` | Ventas en línea: pedidos y montos totales, por minuto, por estado y por tipo de entrega |
+| `pedidos360-seguimiento-app` | pedidos | `seguimiento/` | Estado actual de cada pedido y su línea de tiempo, con latencia y shard de origen |
+| `pedidos360-inventario-app` | inventario | `inventario/` | Stock proyectado y alertas de stock bajo |
+| `pedidos360-fallidos-app` | fallidos | `fallidos/` | Registra cada fallido (log `[FALLIDO]` y tabla `registros_fallidos`) |
+
+**Dos aplicaciones distintas sobre el mismo stream:** analítica y seguimiento leen `pedidos360-pedidos-stream` en paralelo, cada una a su ritmo. Si la analítica se detiene, el seguimiento sigue al día y la analítica retoma desde su checkpoint (los eventos siguen retenidos 48 h). Con SQS esto no es posible: el primer consumidor borra el mensaje.
+
+**Varias instancias:** cada instancia de `streaming-service` es un *worker* (columna `leaseOwner` de la tabla). Los workers de una aplicación se reparten los 3 shards. Para la demo, `infra/7-segunda-instancia-streaming.ps1` levanta una segunda instancia (local) y en AWS se lanza una segunda EC2 con `INSTANCIA_ID` distinto.
+
+**Separación de responsabilidades:**
+
+```text
+kcl/ProcesadorShard        (infraestructura: ShardRecordProcessor, checkpoint, ciclo de vida del lease)
+  └─ comun/ProcesadorRegistros  (validación, duplicados, reintentos, envío a fallidos, logs)
+       └─ <dominio>/XxxManejador → <dominio>/XxxService   (lógica de negocio, sin clases de Kinesis)
+```
+
+**Checkpoint:** después de procesar cada lote (`checkpointer.checkpoint()`), con reintento si DynamoDB limita (`ThrottlingException`). Al cerrar un shard por resharding (`shardEnded`) y en el apagado ordenado (`shutdownRequested`) también se hace checkpoint.
+
+**Posición inicial:** `TRIM_HORIZON`. Una aplicación nueva empieza desde el evento más antiguo retenido y así puede reprocesar el historial. Una que ya tiene checkpoint continúa desde él.
+
+### 15.6 Recorrido de un evento y manejo de errores
+
+```mermaid
+flowchart TD
+  R[Registro leído del shard] --> P{¿JSON válido y<br/>DTO válido?}
+  P -- no --> F[stream de fallidos<br/>tipoError=VALIDACION]
+  P -- sí --> D{¿eventId ya procesado<br/>por esta aplicación?}
+  D -- sí --> I[se ignora: DUPLICADO]
+  D -- no --> N[lógica de dominio]
+  N -- ok --> M[marca eventId] --> C
+  N -- EventoInvalido --> F
+  N -- error transitorio --> T{¿intento < 3?}
+  T -- sí --> W[espera 200 ms, 400 ms…] --> N
+  T -- no --> F2[stream de fallidos<br/>TRANSITORIO_AGOTADO]
+  F & F2 & I --> C[siguiente registro … checkpoint al final del lote]
+  F & F2 -.-> A4[pedidos360-fallidos-app<br/>log FALLIDO + tabla]
+```
+
+- **Un evento defectuoso no detiene el shard:** `ProcesadorRegistros` nunca lanza excepciones hacia la KCL. El evento va a fallidos y se sigue con el siguiente.
+- **Logs con contexto:** cada línea incluye aplicación, shard, `sequenceNumber`, `eventId`, intento y causa (también en el MDC). Ejemplo:
+  `[pedidos360-analitica-app] ERROR TRANSITORIO shard=shardId-000000000001 seq=4963… eventId=6f1c… intento=2/3 causa="Base de datos de analítica no disponible (fallo simulado)" -> reintento en 400 ms`
+- **Duplicados:** tabla `eventos_procesados` con restricción única (aplicación, eventId), compartida por todas las instancias.
+- **Si ni siquiera se puede escribir en el stream de fallidos**, el contenido completo queda en el log (`NO SE PUDO ENVIAR A FALLIDOS … payload=…`).
+
+### 15.7 Microservicio administrador (`mensajeria-admin` → `StreamAdminService`)
+
+`StreamAdminService` es la **única** clase que usa el SDK de Kinesis, DynamoDB y CloudWatch. Los controladores solo llaman a sus métodos. El frontend (panel **Streaming**) usa esta API y nunca el SDK. Todas las rutas exigen JWT del grupo ADMIN.
+
+| Método | Ruta | Acción |
+| --- | --- | --- |
+| GET | `/api/admin/streams` | Listar streams (estado, modo, shards abiertos, retención) |
+| GET | `/api/admin/streams/declarados` | Declaración con su justificación |
+| POST | `/api/admin/streams/aplicar` | Crear/ajustar los streams declarados y la alarma (idempotente) |
+| GET | `/api/admin/streams/{nombre}` | Describir (incluye shards: rango de hash, abierto/cerrado, padre) |
+| POST | `/api/admin/streams` | Crear (`{"nombre","shards","retencionHoras","modo"}`) |
+| PUT | `/api/admin/streams/{nombre}/shards` | Cambiar shards (`{"shards":4}`, UNIFORM_SCALING) |
+| PUT | `/api/admin/streams/{nombre}/retencion` | Cambiar retención (`{"horas":72}`) |
+| DELETE | `/api/admin/streams/{nombre}` | Eliminar |
+| GET | `/api/admin/streams/{nombre}/retraso` | IteratorAge (CloudWatch), últimos 15 min |
+| POST | `/api/admin/streams/{nombre}/rafaga?cantidad=30` | Publicar N eventos de prueba en lote y ver el reparto por shard |
+| POST | `/api/admin/streams/{nombre}/prueba` | Publicar un registro libre (evento defectuoso para la demo) |
+| GET | `/api/admin/streaming/aplicaciones` | Cada aplicación: tabla de coordinación (shard → instancia → checkpoint) + retraso por shard |
+| GET | `/api/admin/streaming/instancias` | Lo que informa cada instancia de streaming-service |
+| GET | `/api/admin/streaming/alarma` | Estado de la alarma |
+| GET | `/api/admin/streaming/metricas` · `seguimiento` · `stock` · `alertas` · `fallidos` | Datos producidos por las aplicaciones |
+| POST | `/api/admin/streaming/simulacion?falloAnalitica=true` | Activar en vivo un error transitorio en la analítica |
+
+### 15.8 Supervisión
+
+| Qué | Dónde | Qué problema anticipa |
+| --- | --- | --- |
+| **Checkpoint** (sequence number) por shard y aplicación | Tabla DynamoDB de la aplicación (columna `checkpoint`) · panel Streaming | Un checkpoint que no avanza mientras entran eventos = aplicación detenida o atascada |
+| **Dueño del shard** (`leaseOwner`) y `leaseCounter` | Tabla DynamoDB · panel | Shards sin dueño o todos en una instancia = desbalance o instancia caída |
+| **Retraso de consumo** (`GetRecords.IteratorAgeMilliseconds`, `MillisBehindLatest`) | CloudWatch (AWS/Kinesis) · panel | Si crece y se acerca a la retención (48 h), se **perderán** eventos sin procesar. Es la métrica de la alarma |
+| **Distribución por shard** (`IncomingRecords` / `OutgoingRecords` por shard) | CloudWatch (métricas por shard) · panel (procesados por shard) | Un shard "caliente" = clave de partición mal elegida |
+| `WriteProvisionedThroughputExceeded` | CloudWatch | Faltan shards para el volumen de escritura |
+
+**Alarma:** `pedidos360-pedidos-stream-retraso-consumo` = Maximum de `GetRecords.IteratorAgeMilliseconds` > 60.000 ms durante 2 minutos seguidos. Avisa de un consumidor detenido **antes** de que venza la retención. Se crea con el admin o con el script; opcionalmente notifica al tópico `pedidos360-alertas` del Parcial 2 (`ALARMA_SNS_TOPIC_ARN`).
+
+### 15.9 Casos de uso que requieren streaming, y cuándo SNS/SQS y cuándo Kinesis
+
+1. **Analítica de ventas en línea + seguimiento del pedido leyendo el mismo flujo:** dos aplicaciones independientes sobre `pedidos360-pedidos-stream`, cada una con su checkpoint. Una puede atrasarse o detenerse sin afectar a la otra.
+2. **Reproceso de eventos antiguos:** si la analítica tuvo un bug, se corrige y se recalcula desde la retención (48 h). Se crea una aplicación con nombre nuevo (`TRIM_HORIZON`) o se borra la tabla de coordinación y la tabla de métricas.
+3. **Inventario en tiempo real:** movimientos de stock en orden por producto (clave `productoId`) y alerta inmediata de stock bajo.
+
+| Usar SNS + SQS cuando… | Usar Kinesis cuando… |
+| --- | --- |
+| Cada mensaje es una **tarea** que se hace una vez (enviar un correo, crear la orden de despacho) | Cada evento es un **hecho** que varias aplicaciones leen a su ritmo |
+| Se necesita filtrado por atributos y fanout a colas | Se necesita **orden por clave** (pedido, producto) |
+| Al procesar, el mensaje se borra; reintentos y DLQ por mensaje | Los eventos se **retienen** y se pueden **releer** (reproceso, nuevas aplicaciones) |
+| Volumen variable sin pensar en capacidad | Alto volumen continuo con capacidad conocida (shards) y analítica en línea |
+
+### 15.10 Ejecución local
+
+```powershell
+copy .env.example .env      # completar Cognito y credenciales del Learner Lab
+docker compose up -d --build
+docker compose logs -f streaming-service mensajeria-admin
+```
+
+Al iniciar, `mensajeria-admin` crea los 3 streams y la alarma (`[streams] …` en su log; tarda ~1 minuto). Después, `streaming-service` crea las 4 tablas de coordinación. Segunda instancia: `infra/7-segunda-instancia-streaming.ps1`.
+
+> **Kinesis cobra por shard-hora mientras el stream exista.** Al terminar: `.\infra\6-kinesis-streams.ps1 -Accion eliminar` (borra streams, tablas de coordinación y alarma).
+
+### 15.11 Despliegue en AWS (Learner Lab)
+
+- `streaming-service`: una o dos EC2 con el **LabRole** como *Instance profile* (sin credenciales en la instancia), `DB_HOST` apuntando a RDS (base `streaming_db`) e `INSTANCIA_ID` distinto en cada una (`infra/8-ec2-streaming.sh`). **No** se publica en API Gateway.
+- `mensajeria-admin`: `STREAMING_SERVICE_URLS` con las IP privadas de las EC2 de streaming.
+- `pedidos-service` y `productos-service`: mismas variables que antes. El LabRole les da permiso para publicar en Kinesis.
+- Security Group de streaming: puerto 8085 abierto solo para el Security Group de `mensajeria-admin`.
+
+### 15.12 Dónde está cada requisito
+
+| Requisito | Archivo |
+| --- | --- |
+| Configuración centralizada (región, streams, aplicaciones, posición inicial, reintentos, lectura) | `streaming-service/.../application.yml` (`kinesis.*`) + `config/KinesisProperties.java` · productores: `application.yml` (`streaming.*`) + `streaming/StreamingProperties.java` |
+| Parámetros de los streams declarados y justificados | `mensajeria-admin/.../application.yml` (`streaming.streams`) · `infra/6-kinesis-streams.ps1` |
+| Validación de la declaración | `mensajeria-admin/.../config/DeclaracionStreams.java` (+ test) |
+| DTO tipados + JSON + clave de partición | `pedidos-service/.../streaming/EventoPedidoStream.java`, `productos-service/.../streaming/EventoInventario.java`, `streaming-service/.../eventos/*` |
+| Productor con verificación de registros fallidos en lote | `*/streaming/ProductorKinesis.java` |
+| Consumidores KCL con checkpoint | `streaming-service/.../kcl/ProcesadorShard.java`, `ConsumidoresKcl.java` |
+| Consumidores por dominio, lógica separada | `streaming-service/.../analitica/`, `seguimiento/`, `inventario/`, `fallidos/` |
+| Validación, reintentos con espera creciente, fallidos, duplicados, logs | `streaming-service/.../comun/ProcesadorRegistros.java`, `PublicadorFallidos.java`, `ControlDuplicados.java` (+ `ProcesadorRegistrosTest`) |
+| Administrador con API REST | `mensajeria-admin/.../service/StreamAdminService.java`, `web/StreamsController.java`, `web/StreamingController.java` |
+| Alarma de CloudWatch | `StreamAdminService.crearAlarma()` · `infra/6-kinesis-streams.ps1` |
+| Panel del frontend | `frontend/src/pages/Streaming.jsx` |
+
+### 15.13 Guion de la demo (Parcial 3)
+
+1. Diagrama (15.1): qué administra AWS y qué el equipo.
+2. Consola de Kinesis: los 3 streams, con modo de capacidad, 3 shards y retención. Justificar (15.2).
+3. Iniciar sesión con Cognito → crear un pedido → panel **Streaming**: el pedido aparece en *Seguimiento* y suma en *Analítica* en segundos. En los logs de `streaming-service` se ven las líneas `OK PEDIDO_CREADO shard=… eventId=…`.
+4. Consola de Kinesis → **Visor de datos**: elegir un shard y ver el JSON del evento (DTO, clave de partición).
+5. **Evento defectuoso:** botón *Publicar evento defectuoso* → aparece en *Eventos fallidos* con su causa. **Fallo transitorio:** *Simular fallo de analítica* + *Publicar ráfaga* → los logs muestran los intentos 1/3, 2/3, 3/3 y el envío a fallidos. El seguimiento sigue funcionando.
+6. DynamoDB → tabla `pedidos360-analitica-app`: `leaseKey` (shard), `leaseOwner` (instancia), `checkpoint`.
+7. Ejecutar `infra/7-segunda-instancia-streaming.ps1` (o encender la 2.ª EC2): los shards se reparten entre `streaming-1` y `streaming-2`. Ctrl+C: la otra instancia los retoma desde el checkpoint.
+8. **Cambio en vivo** desde el panel: retención 48 → 72 h, o shards 3 → 4 (y de vuelta a 3).
+9. CloudWatch: `GetRecords.IteratorAgeMilliseconds`, métricas por shard y la alarma.
+10. Cierre: casos de uso y cuándo SNS/SQS vs Kinesis (15.9).
+
+### 15.14 Limitaciones conocidas
+
+- La publicación en Kinesis ocurre después de guardar el pedido y no en la misma transacción (igual que SNS). Si Kinesis falla en ese instante, queda en el log y el pedido no se revierte. La solución completa sería un *transactional outbox*.
+- La marca de idempotencia se guarda en una transacción distinta de la del dominio. Si la instancia cae justo entre ambas, ese evento podría aplicarse dos veces en la analítica.
+- La ráfaga de prueba del admin publica eventos sintéticos (`origen = mensajeria-admin (rafaga de prueba)`): suman en la analítica, pero no existen como pedidos en `pedidos-service`.

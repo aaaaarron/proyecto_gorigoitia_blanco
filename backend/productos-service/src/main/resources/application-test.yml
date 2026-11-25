@@ -11,3 +11,5 @@ cognito:
   issuer-uri: https://example.com/fake-issuer
 cors:
   allowed-origins: http://localhost:3000
+streaming:
+  habilitado: false

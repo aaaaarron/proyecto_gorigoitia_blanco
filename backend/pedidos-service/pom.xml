@@ -20,6 +20,7 @@
     <properties>
         <java.version>21</java.version>
         <spring-cloud-aws.version>3.2.1</spring-cloud-aws.version>
+        <aws-sdk.version>2.25.70</aws-sdk.version>
     </properties>
 
     <!-- Parcial 2: BOM de Spring Cloud AWS (3.2.x es la línea compatible con Spring Boot 3.3) -->
@@ -29,6 +30,15 @@
                 <groupId>io.awspring.cloud</groupId>
                 <artifactId>spring-cloud-aws-dependencies</artifactId>
                 <version>${spring-cloud-aws.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Parcial 3: BOM del AWS SDK v2 (Kinesis, DynamoDB, CloudWatch). Va después del de Spring Cloud AWS:
+                 si ese ya fija la versión del SDK, se respeta; si no, todas las piezas del SDK quedan alineadas. -->
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -66,6 +76,11 @@
         <dependency>
             <groupId>io.awspring.cloud</groupId>
             <artifactId>spring-cloud-aws-starter-sns</artifactId>
+        </dependency>
+        <!-- Parcial 3: Amazon Kinesis Data Streams -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kinesis</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

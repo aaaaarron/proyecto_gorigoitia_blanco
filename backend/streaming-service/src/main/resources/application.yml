@@ -1,0 +1,83 @@
+server:
+  port: ${SERVER_PORT:8085}
+
+spring:
+  application:
+    name: streaming-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5436}/${DB_NAME:streaming_db}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+
+# ---------------------------------------------------------------------------------------------
+# Parcial 3 - CONFIGURACIÓN CENTRALIZADA DE KINESIS
+# Región, streams, aplicaciones consumidoras (consumer groups), posición inicial, reintentos y lectura.
+# Los streams se crean con infra/6-kinesis-streams.ps1 o desde mensajeria-admin (no desde aquí).
+# Credenciales: variables del Learner Lab (.env, local) o rol LabRole (EC2). Nunca en el repositorio.
+# ---------------------------------------------------------------------------------------------
+kinesis:
+  region: ${AWS_REGION:us-east-1}
+  consumidores-habilitados: ${CONSUMIDORES_HABILITADOS:true}
+  # Identifica a esta instancia como "worker" en la tabla de coordinación (leaseOwner)
+  instancia-id: ${INSTANCIA_ID:${HOSTNAME:streaming-local}}
+  # TRIM_HORIZON: una aplicación NUEVA empieza desde el evento más antiguo retenido (permite reprocesar).
+  # Una aplicación que ya tiene checkpoint siempre continúa desde su checkpoint.
+  posicion-inicial: ${POSICION_INICIAL:TRIM_HORIZON}
+  streams:
+    pedidos: ${STREAM_PEDIDOS:pedidos360-pedidos-stream}
+    inventario: ${STREAM_INVENTARIO:pedidos360-inventario-stream}
+    fallidos: ${STREAM_FALLIDOS:pedidos360-fallidos-stream}
+  aplicaciones:
+    # Dos aplicaciones distintas sobre el MISMO stream, cada una con su propio checkpoint
+    analitica:
+      nombre: pedidos360-analitica-app
+      stream: ${kinesis.streams.pedidos}
+      habilitada: ${APP_ANALITICA:true}
+      enviar-a-fallidos: true
+    seguimiento:
+      nombre: pedidos360-seguimiento-app
+      stream: ${kinesis.streams.pedidos}
+      habilitada: ${APP_SEGUIMIENTO:true}
+      enviar-a-fallidos: true
+    inventario:
+      nombre: pedidos360-inventario-app
+      stream: ${kinesis.streams.inventario}
+      habilitada: ${APP_INVENTARIO:true}
+      enviar-a-fallidos: true
+    fallidos:
+      nombre: pedidos360-fallidos-app
+      stream: ${kinesis.streams.fallidos}
+      habilitada: ${APP_FALLIDOS:true}
+      enviar-a-fallidos: false   # no reenvía a su propio stream (evita un ciclo)
+  reintentos:
+    max-intentos: 3              # errores transitorios: 3 intentos
+    espera-inicial-ms: 200       # 200 ms -> 400 ms (espera creciente)
+    multiplicador: 2.0
+    max-intentos-fallidos: 3     # intentos de escribir en el stream de fallidos
+  lectura:
+    max-registros: 100           # registros por GetRecords
+    intervalo-ms: 1000           # 1 lectura/s por shard y aplicación (límite de Kinesis: 5 GetRecords/s por shard)
+
+simulacion:
+  fallo-transitorio-analitica: ${SIMULAR_FALLO_ANALITICA:false}
+
+logging:
+  level:
+    # La KCL es muy verbosa en INFO; se dejan sus advertencias y los logs propios de la aplicación
+    software.amazon.kinesis: WARN
+    software.amazon.kinesis.coordinator.Scheduler: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

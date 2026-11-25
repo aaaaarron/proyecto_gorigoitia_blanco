@@ -66,3 +66,68 @@ management:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+# ---------------------------------------------------------------------------------------------
+# Parcial 3 - PLATAFORMA DE STREAMING (Amazon Kinesis Data Streams)
+# Parámetros de administración de cada stream declarados en código y justificados por el flujo que
+# atienden. StreamAdminService los aplica (al iniciar o con POST /api/admin/streams/aplicar).
+# Plan B equivalente por CLI: infra/6-kinesis-streams.ps1.
+# Durabilidad que resuelve AWS: cada registro se replica de forma síncrona en 3 zonas de disponibilidad
+# antes de confirmar el PutRecord; no hay brokers, nodos ni réplicas que administrar.
+# ---------------------------------------------------------------------------------------------
+streaming:
+  # true = crea/ajusta los streams al iniciar el admin. Kinesis cobra por shard-hora: elimina los streams
+  # al terminar (infra/6-kinesis-streams.ps1 -Accion eliminar) y deja esto en false si no los necesitas.
+  aplicar-al-iniciar: ${STREAMS_APLICAR_AL_INICIAR:true}
+  region: ${AWS_REGION:us-east-1}
+  # Instancias de streaming-service (separadas por coma) para leer su estado (shards asignados, retraso)
+  service-urls: ${STREAMING_SERVICE_URLS:http://localhost:8085}
+  # Métricas por shard en CloudWatch (IncomingRecords, OutgoingRecords, IteratorAgeMilliseconds)
+  monitoreo-por-shard: ${STREAMS_MONITOREO_POR_SHARD:true}
+  streams:
+    - nombre: pedidos360-pedidos-stream
+      rol: NEGOCIO
+      modo: PROVISIONED
+      shards: 3
+      retencion-horas: 48
+      justificacion: >-
+        Ciclo de vida del pedido (PEDIDO_CREADO, PEDIDO_ESTADO_ACTUALIZADO). Lo leen 2 aplicaciones (analítica y
+        seguimiento). 3 shards = hasta 3.000 registros/s o 3 MB/s de escritura y permite repartir el consumo entre
+        hasta 3 instancias por aplicación. Clave de partición pedidoId (orden por pedido). 48 h para reprocesar si
+        una aplicación estuvo caída o hay que recalcular la analítica.
+    - nombre: pedidos360-inventario-stream
+      rol: NEGOCIO
+      modo: PROVISIONED
+      shards: 3
+      retencion-horas: 24
+      justificacion: >-
+        Movimientos de stock (STOCK_RESERVADO, STOCK_BAJO, STOCK_AJUSTADO), uno por producto de cada pedido: más
+        eventos que el stream de pedidos. Clave productoId (orden por producto). La alerta de stock bajo pierde
+        valor rápido: basta la retención mínima de 24 h (la más barata).
+    - nombre: pedidos360-fallidos-stream
+      rol: FALLIDOS
+      modo: PROVISIONED
+      shards: 1
+      retencion-horas: 168
+      justificacion: >-
+        Mensajes fallidos de todas las aplicaciones. Bajo volumen: 1 shard (1.000 registros/s) sobra.
+        7 días de retención para diagnosticar y reprocesar; siempre más que los streams de negocio.
+  aplicaciones:
+    - nombre: pedidos360-analitica-app
+      stream: pedidos360-pedidos-stream
+      proposito: Analítica de ventas en línea (pedidos y montos por minuto, por estado y por tipo de entrega)
+    - nombre: pedidos360-seguimiento-app
+      stream: pedidos360-pedidos-stream
+      proposito: Seguimiento del pedido en tiempo real (estado actual y línea de tiempo con latencia)
+    - nombre: pedidos360-inventario-app
+      stream: pedidos360-inventario-stream
+      proposito: Stock proyectado y alertas de stock bajo
+    - nombre: pedidos360-fallidos-app
+      stream: pedidos360-fallidos-stream
+      proposito: Registro y diagnóstico de los eventos que no se pudieron procesar
+  alarma:
+    nombre: pedidos360-pedidos-stream-retraso-consumo
+    stream: pedidos360-pedidos-stream
+    umbral-ms: 60000       # 1 minuto de retraso = una aplicación detenida o que no da abasto
+    periodos: 2            # 2 minutos seguidos sobre el umbral (evita falsas alarmas por un pico)
+    sns-topic-arn: ${ALARMA_SNS_TOPIC_ARN:}

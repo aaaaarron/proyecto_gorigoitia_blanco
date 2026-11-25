@@ -53,6 +53,12 @@ services:
       DB_PASSWORD: postgres
       COGNITO_ISSUER_URI: ${COGNITO_ISSUER_URI}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Parcial 3: publica movimientos de stock en Kinesis (credenciales del Learner Lab desde .env)
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      STREAMING_HABILITADO: ${STREAMING_HABILITADO:-true}
     depends_on:
       productos-db:
         condition: service_healthy
@@ -81,6 +87,8 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
       TOPICO_EVENTOS: pedidos360-eventos
+      # Parcial 3: además de SNS, publica en Kinesis (pedidos360-pedidos-stream)
+      STREAMING_HABILITADO: ${STREAMING_HABILITADO:-true}
     depends_on:
       pedidos-db:
         condition: service_healthy
@@ -127,6 +135,9 @@ services:
       SEGURIDAD_HABILITADA: ${SEGURIDAD_HABILITADA:-true}
       # Pausar/reanudar se envía a TODAS las instancias de consumidores (la 2 es infra/4-segunda-instancia.ps1)
       EVENTOS_SERVICE_URLS: http://eventos-service:8083,http://eventos-service-2:8083
+      # Parcial 3: administrador de streams. La 2.ª instancia de streaming la levanta infra/7-segunda-instancia-streaming.ps1
+      STREAMING_SERVICE_URLS: http://streaming-service:8085,http://streaming-service-2:8085
+      STREAMS_APLICAR_AL_INICIAR: ${STREAMS_APLICAR_AL_INICIAR:-true}
     ports:
       - "8090:8090"
     networks:
@@ -158,6 +169,54 @@ services:
     networks:
       - pedidos360-net
 
+  # ---------------------------------------------------------------- Parcial 3: streaming (Kinesis)
+  # Kinesis es un servicio gestionado: no hay brokers ni nodos que levantar. Aquí solo corren las
+  # aplicaciones consumidoras (KCL) y su base de datos; los streams y la coordinación viven en AWS.
+  streaming-db:
+    image: postgres:16-alpine
+    container_name: streaming-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: streaming_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5436:5432"
+    volumes:
+      - streaming_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - pedidos360-net
+
+  streaming-service:
+    build:
+      context: ./backend/streaming-service
+    container_name: streaming-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: streaming-db
+      DB_PORT: 5432
+      DB_NAME: streaming_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      INSTANCIA_ID: streaming-1
+      SIMULAR_FALLO_ANALITICA: ${SIMULAR_FALLO_ANALITICA:-false}
+    depends_on:
+      streaming-db:
+        condition: service_healthy
+    ports:
+      - "8085:8085"
+    networks:
+      - pedidos360-net
+
   frontend:
     build:
       context: ./frontend
@@ -186,3 +245,4 @@ volumes:
   productos_db_data:
   pedidos_db_data:
   eventos_db_data:
+  streaming_db_data:

@@ -12,6 +12,8 @@ import com.pedidos360.pedidos.messaging.EventoPedido;
 import com.pedidos360.pedidos.messaging.EventoPublisher;
 import com.pedidos360.pedidos.messaging.TipoEvento;
 import com.pedidos360.pedidos.repository.PedidoRepository;
+import com.pedidos360.pedidos.streaming.EventoPedidoStream;
+import com.pedidos360.pedidos.streaming.StreamPublisher;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
@@ -28,11 +30,14 @@ public class PedidoService {
     private final PedidoRepository repository;
     private final ProductosClient productosClient;
     private final EventoPublisher eventoPublisher;
+    private final StreamPublisher streamPublisher;
 
-    public PedidoService(PedidoRepository repository, ProductosClient productosClient, EventoPublisher eventoPublisher) {
+    public PedidoService(PedidoRepository repository, ProductosClient productosClient, EventoPublisher eventoPublisher,
+                         StreamPublisher streamPublisher) {
         this.repository = repository;
         this.productosClient = productosClient;
         this.eventoPublisher = eventoPublisher;
+        this.streamPublisher = streamPublisher;
     }
 
     @Transactional(readOnly = true)
@@ -85,6 +90,8 @@ public class PedidoService {
         Pedido guardado = repository.save(pedido);
         // Parcial 2: notificaciones, despacho y auditoría se procesan en segundo plano (SNS → SQS).
         eventoPublisher.publicar(EventoPedido.de(guardado, TipoEvento.PEDIDO_CREADO));
+        // Parcial 3: el mismo hecho se publica en Kinesis para analítica y seguimiento en tiempo real.
+        streamPublisher.publicar(EventoPedidoStream.de(guardado, TipoEvento.PEDIDO_CREADO));
         return toDTO(guardado);
     }
 
@@ -96,6 +103,7 @@ public class PedidoService {
         pedido.setEstado(nuevoEstado);
         Pedido guardado = repository.save(pedido);
         eventoPublisher.publicar(EventoPedido.de(guardado, TipoEvento.PEDIDO_ESTADO_ACTUALIZADO));
+        streamPublisher.publicar(EventoPedidoStream.de(guardado, TipoEvento.PEDIDO_ESTADO_ACTUALIZADO));
         return toDTO(guardado);
     }
 

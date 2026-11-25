@@ -6,17 +6,26 @@ import com.pedidos360.productos.entity.Producto;
 import com.pedidos360.productos.exception.InsufficientStockException;
 import com.pedidos360.productos.exception.ResourceNotFoundException;
 import com.pedidos360.productos.repository.ProductoRepository;
+import com.pedidos360.productos.streaming.EventoInventario;
+import com.pedidos360.productos.streaming.InventarioPublisher;
+import com.pedidos360.productos.streaming.StreamingProperties;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
 public class ProductoService {
 
     private final ProductoRepository repository;
+    private final InventarioPublisher inventarioPublisher;
+    private final StreamingProperties streaming;
 
-    public ProductoService(ProductoRepository repository) {
+    public ProductoService(ProductoRepository repository, InventarioPublisher inventarioPublisher,
+                           StreamingProperties streaming) {
         this.repository = repository;
+        this.inventarioPublisher = inventarioPublisher;
+        this.streaming = streaming;
     }
 
     public List<ProductoDTO> listar() {
@@ -42,7 +51,11 @@ public class ProductoService {
         producto.setDescripcion(request.getDescripcion());
         producto.setPrecio(request.getPrecio());
         producto.setStock(request.getStock());
-        return toDTO(repository.save(producto));
+        Producto guardado = repository.save(producto);
+        // Parcial 3: un ajuste manual del stock también es un movimiento de inventario
+        inventarioPublisher.publicar(List.of(EventoInventario.de(EventoInventario.STOCK_AJUSTADO,
+                guardado.getId(), guardado.getNombre(), 0, guardado.getStock())));
+        return toDTO(guardado);
     }
 
     public void eliminar(Long id) {
@@ -60,7 +73,19 @@ public class ProductoService {
             throw new InsufficientStockException("Stock insuficiente para el producto " + producto.getNombre());
         }
         producto.setStock(producto.getStock() - cantidad);
-        return toDTO(repository.save(producto));
+        Producto guardado = repository.save(producto);
+
+        // Parcial 3: el movimiento se publica en el stream de inventario (clave = productoId).
+        // Si el stock queda bajo el umbral, se agrega STOCK_BAJO en el MISMO lote (un solo PutRecords).
+        List<EventoInventario> eventos = new ArrayList<>();
+        eventos.add(EventoInventario.de(EventoInventario.STOCK_RESERVADO, guardado.getId(), guardado.getNombre(),
+                cantidad, guardado.getStock()));
+        if (guardado.getStock() <= streaming.umbralStockBajo()) {
+            eventos.add(EventoInventario.de(EventoInventario.STOCK_BAJO, guardado.getId(), guardado.getNombre(),
+                    cantidad, guardado.getStock()));
+        }
+        inventarioPublisher.publicar(eventos);
+        return toDTO(guardado);
     }
 
     private ProductoDTO toDTO(Producto p) {

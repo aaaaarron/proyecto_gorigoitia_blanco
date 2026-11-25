@@ -39,3 +39,14 @@ springdoc:
 mensajeria:
   habilitada: ${MENSAJERIA_HABILITADA:true}
   topico-eventos: ${TOPICO_EVENTOS:pedidos360-eventos}
+
+# Parcial 3: streaming con Amazon Kinesis Data Streams (convive con SNS/SQS, no lo reemplaza).
+# Región, nombre del stream y parámetros de envío centralizados aquí; las credenciales nunca van en el repo.
+streaming:
+  habilitado: ${STREAMING_HABILITADO:true}
+  region: ${AWS_REGION:us-east-1}
+  stream-pedidos: ${STREAM_PEDIDOS:pedidos360-pedidos-stream}
+  envio:
+    max-intentos: 3            # reintentos de los registros rechazados por PutRecords
+    espera-inicial-ms: 100     # 100 ms -> 200 ms (espera creciente)
+    timeout-llamada-ms: 3000   # la creación del pedido no puede quedar esperando a Kinesis

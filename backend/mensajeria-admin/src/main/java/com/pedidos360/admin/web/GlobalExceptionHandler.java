@@ -27,6 +27,24 @@ public class GlobalExceptionHandler {
         return respuesta(HttpStatus.NOT_FOUND, mensaje(e));
     }
 
+    /** Parcial 3: stream o tabla de coordinación inexistente. */
+    @ExceptionHandler({software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException.class,
+            software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException.class})
+    public ResponseEntity<Map<String, Object>> streamNoEncontrado(RuntimeException e) {
+        return respuesta(HttpStatus.NOT_FOUND, mensaje(e));
+    }
+
+    /** Parcial 3: el stream está CREATING/UPDATING/DELETING (p. ej. durante un resharding). */
+    @ExceptionHandler(software.amazon.awssdk.services.kinesis.model.ResourceInUseException.class)
+    public ResponseEntity<Map<String, Object>> streamOcupado(RuntimeException e) {
+        return respuesta(HttpStatus.CONFLICT, mensaje(e) + " (el stream se está actualizando; reintenta en unos segundos)");
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, Object>> estadoInvalido(IllegalStateException e) {
+        return respuesta(HttpStatus.CONFLICT, e.getMessage());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> invalido(IllegalArgumentException e) {
         return respuesta(HttpStatus.BAD_REQUEST, e.getMessage());

@@ -21,3 +21,5 @@ productos:
 mensajeria:
   habilitada: false
   topico-eventos: pedidos360-eventos-test
+streaming:
+  habilitado: false

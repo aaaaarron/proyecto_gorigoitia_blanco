@@ -20,6 +20,7 @@
     <properties>
         <java.version>21</java.version>
         <spring-cloud-aws.version>3.2.1</spring-cloud-aws.version>
+        <aws-sdk.version>2.25.70</aws-sdk.version>
     </properties>
 
     <dependencyManagement>
@@ -28,6 +29,15 @@
                 <groupId>io.awspring.cloud</groupId>
                 <artifactId>spring-cloud-aws-dependencies</artifactId>
                 <version>${spring-cloud-aws.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Parcial 3: BOM del AWS SDK v2 (Kinesis, DynamoDB, CloudWatch). Va después del de Spring Cloud AWS:
+                 si ese ya fija la versión del SDK, se respeta; si no, todas las piezas del SDK quedan alineadas. -->
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -63,6 +73,19 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>2.6.0</version>
+        </dependency>
+        <!-- Parcial 3: Amazon Kinesis Data Streams -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kinesis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>dynamodb</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>cloudwatch</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

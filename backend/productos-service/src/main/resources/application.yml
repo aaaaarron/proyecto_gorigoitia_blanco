@@ -27,3 +27,14 @@ cors:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+# Parcial 3: streaming de movimientos de stock con Amazon Kinesis Data Streams.
+streaming:
+  habilitado: ${STREAMING_HABILITADO:true}
+  region: ${AWS_REGION:us-east-1}
+  stream-inventario: ${STREAM_INVENTARIO:pedidos360-inventario-stream}
+  umbral-stock-bajo: ${UMBRAL_STOCK_BAJO:5}
+  envio:
+    max-intentos: 3
+    espera-inicial-ms: 100
+    timeout-llamada-ms: 3000

@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        servicio: [productos-service, pedidos-service, eventos-service, mensajeria-admin]
+        servicio: [productos-service, pedidos-service, eventos-service, mensajeria-admin, streaming-service]
     defaults:
       run:
         working-directory: backend/${{ matrix.servicio }}
