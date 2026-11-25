@@ -8,6 +8,7 @@ import com.pedidos360.admin.dto.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchClient;
 import software.amazon.awssdk.services.cloudwatch.model.ComparisonOperator;
@@ -108,17 +109,26 @@ public class StreamAdminService {
 
     public EstadoStream crear(CrearStreamRequest req) {
         String modo = req.modo() == null ? "PROVISIONED" : req.modo();
-        if ("ON_DEMAND".equals(modo)) {
-            kinesis.createStream(b -> b.streamName(req.nombre()).streamModeDetails(d -> d.streamMode(StreamMode.ON_DEMAND)));
-        } else {
-            kinesis.createStream(b -> b.streamName(req.nombre()).shardCount(req.shards())
-                    .streamModeDetails(d -> d.streamMode(StreamMode.PROVISIONED)));
-        }
-        log.info("[streams] Creando {} ({} shards, {}), esperando a que quede ACTIVE...", req.nombre(), req.shards(), modo);
+        crearStream(req.nombre(), modo, req.shards());
         esperarActivo(req.nombre());
-        ajustarRetencion(req.nombre(), req.retencionHoras());
+        try {
+            ajustarRetencion(req.nombre(), req.retencionHoras());
+        } catch (AwsServiceException e) {
+            log.warn("[streams] {} creado, pero no se pudo fijar la retención en {} h: {}", req.nombre(),
+                    req.retencionHoras(), esDenegado(e) ? "no permitido por la política de la cuenta" : e.getMessage());
+        }
         habilitarMonitoreoPorShard(req.nombre());
         return describir(req.nombre());
+    }
+
+    private void crearStream(String nombre, String modo, int shards) {
+        if ("ON_DEMAND".equals(modo)) {
+            kinesis.createStream(b -> b.streamName(nombre).streamModeDetails(d -> d.streamMode(StreamMode.ON_DEMAND)));
+        } else {
+            kinesis.createStream(b -> b.streamName(nombre).shardCount(shards)
+                    .streamModeDetails(d -> d.streamMode(StreamMode.PROVISIONED)));
+        }
+        log.info("[streams] Creando {} ({} shards, {}), esperando a que quede ACTIVE...", nombre, shards, modo);
     }
 
     /** Resharding uniforme. Mientras dura el stream queda UPDATING y sigue aceptando lecturas y escrituras. */
@@ -144,29 +154,57 @@ public class StreamAdminService {
         DeclaracionStreams.validar(props);
         List<String> pasos = new ArrayList<>();
         for (StreamingProperties.StreamDeclarado s : props.streams()) {
+            // Cada paso se intenta por separado: si la cuenta bloquea una operación (p. ej. el Learner Lab
+            // no permite aumentar la retención), se informa y se sigue con el resto de la declaración.
             StreamDescriptionSummary actual = resumenAws(s.nombre());
             if (actual == null) {
-                crear(new CrearStreamRequest(s.nombre(), s.shards(), s.retencionHoras(), s.modo()));
-                pasos.add("Creado " + s.nombre() + " (" + s.modo() + ", " + s.shards() + " shards, " + s.retencionHoras() + " h)");
-                continue;
+                intentar(pasos, "Crear " + s.nombre() + " (" + s.modo() + ", " + s.shards() + " shards)", () -> {
+                    crearStream(s.nombre(), s.modo(), s.shards());
+                    esperarActivo(s.nombre());
+                });
+                actual = resumenAws(s.nombre());
+                if (actual == null) continue;
+            } else {
+                esperarActivo(s.nombre());
             }
-            esperarActivo(s.nombre());
-            if (!Objects.equals(actual.retentionPeriodHours(), s.retencionHoras())) {
-                ajustarRetencion(s.nombre(), s.retencionHoras());
-                pasos.add(s.nombre() + ": retención " + actual.retentionPeriodHours() + " -> " + s.retencionHoras() + " h");
+            final StreamDescriptionSummary existente = actual;
+            if (!Objects.equals(existente.retentionPeriodHours(), s.retencionHoras())) {
+                intentar(pasos, s.nombre() + ": retención " + existente.retentionPeriodHours() + " -> " + s.retencionHoras() + " h",
+                        () -> ajustarRetencion(s.nombre(), s.retencionHoras()));
             }
-            if ("PROVISIONED".equals(s.modo()) && !Objects.equals(actual.openShardCount(), s.shards())) {
-                cambiarShards(s.nombre(), s.shards());
-                pasos.add(s.nombre() + ": shards " + actual.openShardCount() + " -> " + s.shards());
+            if ("PROVISIONED".equals(s.modo()) && !Objects.equals(existente.openShardCount(), s.shards())) {
+                intentar(pasos, s.nombre() + ": shards " + existente.openShardCount() + " -> " + s.shards(),
+                        () -> cambiarShards(s.nombre(), s.shards()));
             }
             habilitarMonitoreoPorShard(s.nombre());
-            pasos.add(s.nombre() + " al día");
+            pasos.add(s.nombre() + " revisado");
         }
         if (props.alarma() != null) {
-            crearAlarma();
-            pasos.add("Alarma " + props.alarma().nombre() + " sobre " + METRICA_RETRASO + " de " + props.alarma().stream());
+            intentar(pasos, "Alarma " + props.alarma().nombre() + " sobre " + METRICA_RETRASO + " de " + props.alarma().stream(),
+                    this::crearAlarma);
         }
         return pasos;
+    }
+
+    /** Ejecuta un paso de administración; si AWS lo rechaza, lo registra y deja seguir con los demás. */
+    private void intentar(List<String> pasos, String descripcion, Runnable accion) {
+        try {
+            accion.run();
+            pasos.add(descripcion);
+            log.info("[streams] {}", descripcion);
+        } catch (AwsServiceException e) {
+            String motivo = esDenegado(e)
+                    ? "no permitido por la política de la cuenta (Learner Lab)"
+                    : (e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : e.getMessage());
+            pasos.add("OMITIDO: " + descripcion + " -> " + motivo);
+            log.warn("[streams] OMITIDO: {} -> {}", descripcion, motivo);
+        }
+    }
+
+    private static boolean esDenegado(AwsServiceException e) {
+        String codigo = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "";
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        return (codigo != null && codigo.contains("AccessDenied")) || msg.contains("not authorized");
     }
 
     // --------------------------------------------------------------------- aplicaciones consumidoras
