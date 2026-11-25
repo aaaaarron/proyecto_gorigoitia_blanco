@@ -774,3 +774,37 @@ Al iniciar, `mensajeria-admin` crea los 3 streams y la alarma (`[streams] …` e
 - La publicación en Kinesis ocurre después de guardar el pedido y no en la misma transacción (igual que SNS). Si Kinesis falla en ese instante, queda en el log y el pedido no se revierte. La solución completa sería un *transactional outbox*.
 - La marca de idempotencia se guarda en una transacción distinta de la del dominio. Si la instancia cae justo entre ambas, ese evento podría aplicarse dos veces en la analítica.
 - La ráfaga de prueba del admin publica eventos sintéticos (`origen = mensajeria-admin (rafaga de prueba)`): suman en la analítica, pero no existen como pedidos en `pedidos-service`.
+
+### 15.15 Capturas (AWS Academy Learner Lab)
+
+**1. Streams en Kinesis.** Los 3 streams activos en modo de capacidad **Provisioned**: `pedidos360-pedidos-stream` e `pedidos360-inventario-stream` con **3 shards** cada uno, y `pedidos360-fallidos-stream` con **1 shard**.
+
+![Streams en Kinesis](docs/capturas/01-streams.png)
+
+**2. Evento en el visor de datos.** Registros de `pedidos360-pedidos-stream` leídos desde un shard con posición inicial *Trim horizon*: la **clave de partición** es el `pedidoId` y el dato es el DTO en JSON (`eventId`, `tipoEvento`, …). El resumen muestra modo Provisioned y retención de 1 día (el Learner Lab bloquea aumentarla; ver 15.2).
+
+![Data viewer](docs/capturas/02-data-viewer.png)
+
+**3. Tabla de coordinación en DynamoDB.** Tabla `pedidos360-analitica-app` (una por aplicación consumidora, creada por la KCL): cada fila es un shard (`leaseKey`), con la instancia que lo procesa (`leaseOwner = streaming-1-…`), su `checkpoint` (sequence number), `leaseCounter` y `parentShardId` (los shards actuales son hijos de los que se cerraron al cambiar de 3 a 4 y de vuelta a 3 shards).
+
+![Tabla de coordinación](docs/capturas/03-dynamodb-coordinacion.png)
+
+**4. Métricas del stream.** Pestaña *Monitoring* de `pedidos360-pedidos-stream`: `GetRecords.IteratorAgeMilliseconds` (retraso de consumo), latencia, registros leídos y tasa de éxito.
+
+![Métricas del stream](docs/capturas/04-metricas-stream.png)
+
+**5. Alarma de CloudWatch.** `pedidos360-pedidos-stream-retraso-consumo`: `GetRecords.IteratorAgeMilliseconds > 60000` durante 2 minutos, en estado **OK**. Junto a ella siguen las alarmas de las DLQ de SQS del Parcial 2.
+
+![Alarma](docs/capturas/05-alarma-cloudwatch.png)
+
+**6. Demo — flujo exitoso.** Panel *Streaming* (solo ADMIN): configuración de los 3 streams, reparto de shards de cada aplicación consumidora con checkpoint y retraso, analítica en línea (pedidos, ventas, envío/retiro, cambios de estado y pedidos por minuto) y seguimiento en tiempo real de cada pedido con su latencia y shard.
+
+![Flujo exitoso](docs/capturas/06-flujo-exitoso.png)
+
+**7. Demo — flujo fallido.** Alertas de stock bajo (`pedidos360-inventario-app`) y eventos que terminaron en `pedidos360-fallidos-stream`: `TRANSITORIO_AGOTADO` (fallo simulado de la analítica, 3 intentos con espera creciente) y `VALIDACION` (evento defectuoso sin `pedidoId` y con total negativo), cada uno con su causa, intentos y shard/sequence number de origen.
+
+![Flujo fallido](docs/capturas/07-flujo-fallido.png)
+
+**8. Logs de los consumidores.** Cada línea indica aplicación, tipo de evento, shard, sequence number, clave de partición, `eventId` e intento. Se ven el registro `[FALLIDO]` con su causa, las dos aplicaciones (analítica y seguimiento) procesando el mismo evento de forma independiente y los eventos de inventario `STOCK_RESERVADO` / `STOCK_BAJO`.
+
+![Logs de los consumidores](docs/capturas/08-logs-consumidores.png)
