@@ -51,8 +51,10 @@ public class ConsumidoresKcl implements SmartLifecycle {
     private final ProcesadorRegistros procesador;
     private final EstadoShards estado;
     private final Map<String, ManejadorEventos<?>> manejadores = new HashMap<>();
-    private final List<Scheduler> schedulers = new ArrayList<>();
+    /** Scheduler vigente de cada aplicación (se reemplaza si el anterior se detuvo). */
+    private final Map<String, Scheduler> schedulers = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean corriendo;
+    private static final long ESPERA_REINICIO_MS = 30_000;
 
     public ConsumidoresKcl(KinesisAsyncClient kinesis, DynamoDbAsyncClient dynamo, CloudWatchAsyncClient cloudWatch,
                            KinesisProperties props, ProcesadorRegistros procesador, EstadoShards estado,
@@ -70,6 +72,7 @@ public class ConsumidoresKcl implements SmartLifecycle {
 
     @Override
     public synchronized void start() {
+        corriendo = true;
         for (Map.Entry<String, KinesisProperties.Aplicacion> entrada : props.aplicaciones().entrySet()) {
             KinesisProperties.Aplicacion app = entrada.getValue();
             if (!app.habilitada()) {
@@ -81,15 +84,40 @@ public class ConsumidoresKcl implements SmartLifecycle {
                 log.error("[kcl] No hay manejador para la aplicación '{}'", entrada.getKey());
                 continue;
             }
+            Thread supervisor = new Thread(() -> supervisar(app, manejador), "kcl-" + app.nombre());
+            supervisor.setDaemon(true);
+            supervisor.start();
+        }
+    }
+
+    /**
+     * Ejecuta el Scheduler de una aplicación y lo vuelve a crear si se detiene solo. La KCL se apaga después de
+     * 20 intentos de inicialización fallidos (p. ej. si el stream todavía no existe porque mensajeria-admin lo
+     * está creando, o si se eliminó y se volvió a crear). Así la aplicación se recupera sin reiniciar el servicio.
+     */
+    private void supervisar(KinesisProperties.Aplicacion app, ManejadorEventos<?> manejador) {
+        while (corriendo) {
             Scheduler scheduler = crearScheduler(app, manejador);
-            Thread hilo = new Thread(scheduler, "kcl-" + app.nombre());
-            hilo.setDaemon(true);
-            hilo.start();
-            schedulers.add(scheduler);
+            schedulers.put(app.nombre(), scheduler);
             log.info("[kcl] Aplicación {} iniciada sobre {} (instancia {}, posición inicial {})",
                     app.nombre(), app.stream(), props.instanciaId(), props.posicionInicial());
+            try {
+                scheduler.run(); // bloquea mientras la aplicación consume
+            } catch (RuntimeException e) {
+                log.error("[kcl] La aplicación {} terminó con error: {}", app.nombre(), e.getMessage());
+            }
+            if (!corriendo) {
+                break;
+            }
+            log.warn("[kcl] La aplicación {} se detuvo (¿el stream {} no existe o se recreó?). Reintento en {} s",
+                    app.nombre(), app.stream(), ESPERA_REINICIO_MS / 1000);
+            try {
+                Thread.sleep(ESPERA_REINICIO_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
-        corriendo = true;
     }
 
     private <T extends EventoStream> Scheduler crearScheduler(KinesisProperties.Aplicacion app,
@@ -119,7 +147,8 @@ public class ConsumidoresKcl implements SmartLifecycle {
 
     @Override
     public synchronized void stop() {
-        for (Scheduler s : schedulers) {
+        corriendo = false;
+        for (Scheduler s : schedulers.values()) {
             try {
                 // Apagado ordenado: cada procesador hace checkpoint y libera su lease para que otra instancia
                 // lo tome de inmediato (sin esperar a que venza).
@@ -131,7 +160,6 @@ public class ConsumidoresKcl implements SmartLifecycle {
             }
         }
         schedulers.clear();
-        corriendo = false;
     }
 
     @Override
